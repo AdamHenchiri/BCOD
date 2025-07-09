@@ -3,60 +3,46 @@ import numpy as np
 from utils import extract_bit_plane, compute_psi, compute_weighted_histogram
 
 cap = cv2.VideoCapture("images/templates/childs.mp4")
-object_detector = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=80)
-
 trackers = []
 
-def on_mouse(event, x, y, flags, param):
-    if event == cv2.EVENT_LBUTTONDOWN:
-        for (bx, by, bw, bh) in param["boxes"]:
-            if bx <= x <= bx + bw and by <= y <= by + bh:
-                roi = param["frame"][by:by + bh, bx:bx + bw]
-                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                T6 = extract_bit_plane(gray_roi, 6)
-                T7 = extract_bit_plane(gray_roi, 7)
-                hist = compute_weighted_histogram(gray_roi)
-                name = input(f"📝 Entrez un nom pour l'objet sélectionné ({bx}, {by}): ")
-                trackers.append({
-                    "name": name,
-                    "T6_base": T6,
-                    "T7_base": T7,
-                    "hist": hist,
-                    "w0": bw,
-                    "h0": bh,
-                    "last_x": bx,
-                    "last_y": by
-                })
-                print(f"{name} is selected to be tracked!")
-                break
-
 cv2.namedWindow("Frame")
-cv2.setMouseCallback("Frame", on_mouse, param={})
 
 while True:
-    #lecture de la video
     ret, frame = cap.read()
     if not ret:
         break
-    #Pour faire la rotation
-    #frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
     display_frame = frame.copy()
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    # application du mask pour récupérer les objets en mouvements
-    mask = object_detector.apply(frame)
-    # prendre que les objet en pur blanc
-    _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    key = cv2.waitKey(30) & 0xFF
 
-    boxes = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area > 100:
-            x, y, w, h = cv2.boundingRect(cnt)
-            boxes.append((x, y, w, h))
-            cv2.rectangle(display_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    if key == ord('q'):
+        break
 
-    cv2.setMouseCallback("Frame", on_mouse, param={"frame": frame.copy(), "boxes": boxes})
+    elif key == ord('p'):
+        print("Select and press entry then esc")
+        frozen_frame = frame.copy()
+        rois = cv2.selectROIs("Selection ", frozen_frame, fromCenter=False, showCrosshair=True)
+        cv2.destroyWindow("Selection")
+        gray_frozen = cv2.cvtColor(frozen_frame, cv2.COLOR_BGR2GRAY)
+        for roi in rois:
+            x, y, w, h = roi
+            roi_img = gray_frozen[y:y+h, x:x+w]
+            T6 = extract_bit_plane(roi_img, 6)
+            T7 = extract_bit_plane(roi_img, 7)
+            hist = compute_weighted_histogram(roi_img)
+            name = input(f"name the object : ")
+            trackers.append({
+                "name": name,
+                "T6_base": T6,
+                "T7_base": T7,
+                "hist": hist,
+                "w0": w,
+                "h0": h,
+                "last_x": x,
+                "last_y": y
+            })
+        print(f"{len(trackers)} added")
 
     for obj in trackers:
         scales = [0.8, 1.0, 1.2]
@@ -65,7 +51,6 @@ while True:
         best_coords = (obj["last_x"], obj["last_y"])
         best_size = (obj["w0"], obj["h0"])
 
-        # Recherche locale a 30px de rayon
         for scale in scales:
             w = int(obj["w0"] * scale)
             h = int(obj["h0"] * scale)
@@ -82,30 +67,21 @@ while True:
                     roi = gray[y:y + h, x:x + w]
                     I6 = extract_bit_plane(roi, 6)
                     I7 = extract_bit_plane(roi, 7)
-                    #boolean compt
                     zeros = compute_psi(T6, T7, I6, I7)
-                    #histogram compute
                     roi_hist = compute_weighted_histogram(roi)
-                    hist_sim = cv2.compareHist(obj["hist"].astype(np.float32), roi_hist.astype(np.float32),
-                                               cv2.HISTCMP_CORREL)
+                    hist_sim = cv2.compareHist(obj["hist"].astype(np.float32), roi_hist.astype(np.float32), cv2.HISTCMP_CORREL)
                     total_score = 0.8 * zeros + 0.2 * hist_sim
-                    # print("zero score = ",zeros)
-                    # print("hist_sim score = ",hist_sim)
-                    # print("total score = ",total_score)
+
                     if total_score > best_score:
                         best_score = total_score
                         best_coords = (x, y)
                         best_size = (w, h)
 
-                    print(best_score)
-                    if best_score > 2750:
-                        found = True
-                    else:
-                        found = False
+        if best_score > 2750:
+            found = True
 
-        # Recherche globale si objet non trouvé localement
         if not found:
-            print('not found !')
+            print(f"[{obj['name']}] not found locally, searching globally")
             for scale in scales:
                 w = int(obj["w0"] * scale)
                 h = int(obj["h0"] * scale)
@@ -119,8 +95,7 @@ while True:
                         I7 = extract_bit_plane(roi, 7)
                         zeros = compute_psi(T6, T7, I6, I7)
                         roi_hist = compute_weighted_histogram(roi)
-                        hist_sim = cv2.compareHist(obj["hist"].astype(np.float32), roi_hist.astype(np.float32),
-                                                   cv2.HISTCMP_CORREL)
+                        hist_sim = cv2.compareHist(obj["hist"].astype(np.float32), roi_hist.astype(np.float32), cv2.HISTCMP_CORREL)
                         total_score = 0.8 * zeros + 0.2 * hist_sim
 
                         if total_score > best_score:
