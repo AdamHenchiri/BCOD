@@ -1,11 +1,242 @@
 import cv2
 import numpy as np
 from utils import extract_bit_plane, compute_psi, compute_weighted_histogram
+from pyzbar.pyzbar import decode
 
-cap = cv2.VideoCapture("images/templates/childs.mp4")
+def detect_qr_codes(frame, gray_frame):
+    global trackers, detected_qr_codes
+
+    decoded_objects = decode(frame)
+    qr_codes = []
+
+    for obj in decoded_objects:
+        qr_data = obj.data.decode("utf-8")
+        points = obj.polygon
+
+        if len(points) >= 4:
+            pts = np.array([(p.x, p.y) for p in points], dtype=np.int32)
+            x = np.min(pts[:, 0])
+            y = np.min(pts[:, 1])
+            w = np.max(pts[:, 0]) - x
+            h = np.max(pts[:, 1]) - y
+        else:
+            continue
+
+        qr_id = f"{qr_data}_{x}_{y}"
+
+        # Vérifie que ce QR n’est pas déjà suivi
+        already_tracking = False
+        for tracker in trackers:
+            if tracker["qr_data"] == qr_data:
+                already_tracking = True
+                break
+
+        if not already_tracking and qr_id not in detected_qr_codes:
+            roi = gray_frame[y:y + h, x:x + w]
+            if roi.shape[0] > 0 and roi.shape[1] > 0:
+                T6 = extract_bit_plane(roi, 6)
+                T7 = extract_bit_plane(roi, 7)
+                hist = compute_weighted_histogram(roi)
+
+                trackers.append({
+                    "name": f"QR_{len(trackers)}",
+                    "qr_data": qr_data,
+                    "qr_type": "QRCODE",
+                    "T6_base": T6,
+                    "T7_base": T7,
+                    "hist": hist,
+                    "w0": w,
+                    "h0": h,
+                    "last_x": x,
+                    "last_y": y,
+                    "last_angle": 0,
+                    "qr_points": pts,
+                    "recent_detection": True
+                })
+
+                detected_qr_codes.add(qr_id)
+                print(f"[NEW QR] {qr_data} at ({x}, {y})")
+
+        # Ajouter pour affichage
+        qr_codes.append({
+            'data': qr_data,
+            'points': pts,
+            'rect': (x, y, w, h)
+        })
+
+    return qr_codes
+
+
+# cap = cv2.VideoCapture("images/templates/qr_code2.mp4")
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Erreur : Impossible d'ouvrir la webcam.")
+    exit()
+
 trackers = []
+detected_qr_codes = set()  # Pour éviter les doublons
 
 cv2.namedWindow("Frame")
+
+
+def rotate_image(image, angle):
+    """Optimized rotation function"""
+    if angle == 0:
+        return image
+
+    h, w = image.shape
+    center = (w // 2, h // 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    cos = np.abs(matrix[0, 0])
+    sin = np.abs(matrix[0, 1])
+    new_w = int((h * sin) + (w * cos))
+    new_h = int((h * cos) + (w * sin))
+    matrix[0, 2] += (new_w / 2) - center[0]
+    matrix[1, 2] += (new_h / 2) - center[1]
+    return cv2.warpAffine(image, matrix, (new_w, new_h), flags=cv2.INTER_LINEAR)
+
+
+def compute_matching_score(T6, T7, hist_template, roi):
+    """Compute matching score between template and ROI"""
+    I6 = extract_bit_plane(roi, 6)
+    I7 = extract_bit_plane(roi, 7)
+    zeros = compute_psi(T6, T7, I6, I7)
+    roi_hist = compute_weighted_histogram(roi)
+    hist_sim = cv2.compareHist(hist_template.astype(np.float32),
+                               roi_hist.astype(np.float32),
+                               cv2.HISTCMP_CORREL)
+    return 0.8 * zeros + 0.2 * hist_sim
+
+
+def get_rotated_rectangle_points(center, size, angle):
+    """Get the 4 corner points of a rotated rectangle"""
+    w, h = size
+    angle_rad = np.radians(angle)
+
+    # Half dimensions
+    hw, hh = w / 2.0, h / 2.0
+
+    # Define corners relative to center
+    corners = np.array([
+        [-hw, -hh],  # Top-left
+        [hw, -hh],  # Top-right
+        [hw, hh],  # Bottom-right
+        [-hw, hh]  # Bottom-left
+    ])
+
+    # Rotation matrix
+    cos_a = np.cos(angle_rad)
+    sin_a = np.sin(angle_rad)
+    rotation_matrix = np.array([
+        [cos_a, -sin_a],
+        [sin_a, cos_a]
+    ])
+
+    # Apply rotation
+    rotated_corners = np.dot(corners, rotation_matrix.T)
+
+    # Translate to actual center position
+    rotated_corners[:, 0] += center[0]
+    rotated_corners[:, 1] += center[1]
+
+    return rotated_corners.astype(np.int32)
+
+def track_object_locally(obj, gray):
+    """Local tracking in search area"""
+    best_score = -1
+    best_coords = (obj["last_x"], obj["last_y"])
+    best_angle = obj.get("last_angle", 0)
+    found = False
+
+    w, h = obj["w0"], obj["h0"]
+    T6_base = obj["T6_base"]
+    T7_base = obj["T7_base"]
+
+    # Define search area
+    search_radius = 50
+    search_box = [
+        max(0, obj["last_x"] - search_radius),
+        min(gray.shape[1] - w, obj["last_x"] + search_radius),
+        max(0, obj["last_y"] - search_radius),
+        min(gray.shape[0] - h, obj["last_y"] + search_radius)
+    ]
+
+    # Search with step for optimization
+    step = 16
+    for y in range(search_box[2], search_box[3], step):
+        for x in range(search_box[0], search_box[1], step):
+            if x + w > gray.shape[1] or y + h > gray.shape[0]:
+                continue
+
+            roi = gray[y:y + h, x:x + w]
+            if roi.shape[0] != h or roi.shape[1] != w:
+                continue
+
+            score = compute_matching_score(T6_base, T7_base, obj["hist"], roi)
+
+            if score > best_score:
+                best_score = score
+                best_coords = (x, y)
+                best_angle = 0
+                found = True
+
+    return found, best_score, best_coords, best_angle
+
+
+def track_object_globally(obj, gray):
+    """Global tracking with rotation"""
+    best_score = -1
+    best_coords = (obj["last_x"], obj["last_y"])
+    best_angle = obj.get("last_angle", 0)
+    found = False
+
+    w, h = obj["w0"], obj["h0"]
+    T6_base = obj["T6_base"]
+    T7_base = obj["T7_base"]
+
+    # Test different angles around last known angle
+    last_angle = obj.get("last_angle", 0)
+    angle_step = 5
+    angle_range = range(last_angle - 45, last_angle + 46, angle_step)
+
+    for angle in angle_range:
+        angle = angle % 360
+
+        # Rotate template
+        if angle == 0:
+            rot_T6, rot_T7 = T6_base, T7_base
+        else:
+            rot_T6 = rotate_image(T6_base, angle)
+            rot_T7 = rotate_image(T7_base, angle)
+
+        rh, rw = rot_T6.shape
+
+        # Search with larger step for speed
+        step = 8
+        for y in range(0, gray.shape[0] - rh, step):
+            for x in range(0, gray.shape[1] - rw, step):
+                roi = gray[y:y + rh, x:x + rw]
+                if roi.shape[0] != rh or roi.shape[1] != rw:
+                    continue
+
+                score = compute_matching_score(rot_T6, rot_T7, obj["hist"], roi)
+
+                if score > best_score:
+                    best_score = score
+                    best_coords = (x, y)
+                    best_angle = angle
+                    found = True
+
+    return found, best_score, best_coords, best_angle
+
+
+print("Instructions:")
+print("- Press 'q' to quit")
+print("- Press 'p' to manually select regions (optional)")
+print("- Press 'd' to toggle QR code detection on/off")
+print("- QR codes will be automatically detected and tracked")
+
+auto_detect = True
 
 while True:
     ret, frame = cap.read()
@@ -18,97 +249,89 @@ while True:
 
     if key == ord('q'):
         break
-
+    elif key == ord('d'):
+        auto_detect = not auto_detect
+        print(f"Auto detection: {'ON' if auto_detect else 'OFF'}")
     elif key == ord('p'):
-        print("Select and press entry then esc")
-        frozen_frame = frame.copy()
-        rois = cv2.selectROIs("Selection ", frozen_frame, fromCenter=False, showCrosshair=True)
+        print("Select region(s), press Enter to confirm and Esc to close.")
+        rois = cv2.selectROIs("Selection", frame.copy(), fromCenter=False, showCrosshair=True)
         cv2.destroyWindow("Selection")
-        gray_frozen = cv2.cvtColor(frozen_frame, cv2.COLOR_BGR2GRAY)
-        for roi in rois:
-            x, y, w, h = roi
-            roi_img = gray_frozen[y:y+h, x:x+w]
-            T6 = extract_bit_plane(roi_img, 6)
-            T7 = extract_bit_plane(roi_img, 7)
-            hist = compute_weighted_histogram(roi_img)
-            name = input(f"name the object : ")
+
+        for x, y, w, h in rois:
+            roi = gray[y:y + h, x:x + w]
+            T6 = extract_bit_plane(roi, 6)
+            T7 = extract_bit_plane(roi, 7)
+            hist = compute_weighted_histogram(roi)
+            name = input("Enter name for the object: ")
             trackers.append({
                 "name": name,
+                "qr_data": "Manual",
+                "qr_type": "Manual",
                 "T6_base": T6,
                 "T7_base": T7,
                 "hist": hist,
                 "w0": w,
                 "h0": h,
                 "last_x": x,
-                "last_y": y
+                "last_y": y,
+                "last_angle": 0
             })
-        print(f"{len(trackers)} added")
+        print(f"{len(rois)} object(s) added.")
 
-    for obj in trackers:
-        scales = [0.8, 1.0, 1.2]
-        found = False
-        best_score = -1
-        best_coords = (obj["last_x"], obj["last_y"])
-        best_size = (obj["w0"], obj["h0"])
+    # Automatic QR code detection
+    if auto_detect:
+        detected_qrs = detect_qr_codes(frame, gray)
 
-        for scale in scales:
-            w = int(obj["w0"] * scale)
-            h = int(obj["h0"] * scale)
-            T6 = cv2.resize(obj["T6_base"], (w, h), interpolation=cv2.INTER_NEAREST)
-            T7 = cv2.resize(obj["T7_base"], (w, h), interpolation=cv2.INTER_NEAREST)
+        # Draw detected QR codes (before tracking)
+        for qr in detected_qrs:
+            x, y, w, h = qr['rect']
+            points = qr['points']
 
-            x0 = max(0, obj["last_x"] - 30)
-            x1 = min(gray.shape[1] - w, obj["last_x"] + 30)
-            y0 = max(0, obj["last_y"] - 30)
-            y1 = min(gray.shape[0] - h, obj["last_y"] + 30)
+            # Draw QR code boundary with its actual shpe
+            cv2.polylines(display_frame, [points], True, (255, 0, 0), 2)
+            cv2.putText(display_frame, f"Detected: {qr['data'][:20]}...",
+                        (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
-            for y in range(y0, y1, 2):
-                for x in range(x0, x1, 2):
-                    roi = gray[y:y + h, x:x + w]
-                    I6 = extract_bit_plane(roi, 6)
-                    I7 = extract_bit_plane(roi, 7)
-                    zeros = compute_psi(T6, T7, I6, I7)
-                    roi_hist = compute_weighted_histogram(roi)
-                    hist_sim = cv2.compareHist(obj["hist"].astype(np.float32), roi_hist.astype(np.float32), cv2.HISTCMP_CORREL)
-                    total_score = 0.8 * zeros + 0.2 * hist_sim
+    # Process tracked objects
+    if len(trackers) > 0:
+        for obj in trackers:
+            # Tracking (local + global)
+            found, best_score, best_coords, best_angle = track_object_locally(obj, gray)
+            if not found or best_score < 2400:
+                found, best_score, best_coords, best_angle = track_object_globally(obj, gray)
 
-                    if total_score > best_score:
-                        best_score = total_score
-                        best_coords = (x, y)
-                        best_size = (w, h)
+            obj["last_x"], obj["last_y"] = best_coords
+            obj["last_angle"] = best_angle
 
-        if best_score > 2750:
-            found = True
+            # --- Affichage du contour ---
+            if obj.get("recent_detection") and obj.get("qr_points") is not None:
+                # Utiliser le contour réel fourni par pyzbar
+                cv2.polylines(display_frame, [obj["qr_points"]], True, (255, 0, 0), 2)
+                x, y = obj["qr_points"][0]
+            else:
+                # Utiliser rectangle tourné si plus de qr_points fiables
+                x, y = best_coords
+                w, h = obj["w0"], obj["h0"]
+                center = (x + w // 2, y + h // 2)
+                points = get_rotated_rectangle_points(center, (w, h), best_angle)
+                cv2.polylines(display_frame, [points], True, (0, 255, 0), 2)
+                obj["qr_points"] = points  # Met à jour le contour estimé
 
-        if not found:
-            print(f"[{obj['name']}] not found locally, searching globally")
-            for scale in scales:
-                w = int(obj["w0"] * scale)
-                h = int(obj["h0"] * scale)
-                T6 = cv2.resize(obj["T6_base"], (w, h), interpolation=cv2.INTER_NEAREST)
-                T7 = cv2.resize(obj["T7_base"], (w, h), interpolation=cv2.INTER_NEAREST)
+            # --- Affichage texte + point central ---
+            info_text = f"{obj['name']}: {obj['qr_data'][:15]}..."
+            angle_text = f"Angle: {best_angle:.0f}° Score: {best_score:.1f}"
+            cv2.putText(display_frame, info_text, (x, y - 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.putText(display_frame, angle_text, (x, y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            cv2.circle(display_frame, (x + w // 2, y + h // 2), 3, (0, 0, 255), -1)
 
-                for y in range(0, gray.shape[0] - h, 4):
-                    for x in range(0, gray.shape[1] - w, 4):
-                        roi = gray[y:y + h, x:x + w]
-                        I6 = extract_bit_plane(roi, 6)
-                        I7 = extract_bit_plane(roi, 7)
-                        zeros = compute_psi(T6, T7, I6, I7)
-                        roi_hist = compute_weighted_histogram(roi)
-                        hist_sim = cv2.compareHist(obj["hist"].astype(np.float32), roi_hist.astype(np.float32), cv2.HISTCMP_CORREL)
-                        total_score = 0.8 * zeros + 0.2 * hist_sim
+            # Après le premier affichage, on désactive le flag "récent"
+            obj["recent_detection"] = False
 
-                        if total_score > best_score:
-                            best_score = total_score
-                            best_coords = (x, y)
-                            best_size = (w, h)
-                            found = True
-
-        obj["last_x"], obj["last_y"] = best_coords
-        x, y = best_coords
-        w, h = best_size
-        cv2.rectangle(display_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-        cv2.putText(display_frame, obj["name"], (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+    # Display status
+    status_text = f"Tracking: {len(trackers)} QR codes | Detection: {'ON' if auto_detect else 'OFF'}"
+    cv2.putText(display_frame, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
     cv2.imshow("Frame", display_frame)
     if cv2.waitKey(1) == 27:
