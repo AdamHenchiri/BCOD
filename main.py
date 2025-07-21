@@ -24,13 +24,11 @@ def detect_qr_codes(frame, gray_frame):
 
         qr_id = f"{qr_data}_{x}_{y}"
 
-        # Vérifie que ce QR n’est pas déjà suivi
         already_tracking = False
         for tracker in trackers:
             if tracker["qr_data"] == qr_data:
                 already_tracking = True
                 break
-
         if not already_tracking and qr_id not in detected_qr_codes:
             roi = gray_frame[y:y + h, x:x + w]
             if roi.shape[0] > 0 and roi.shape[1] > 0:
@@ -57,7 +55,6 @@ def detect_qr_codes(frame, gray_frame):
                 detected_qr_codes.add(qr_id)
                 print(f"[NEW QR] {qr_data} at ({x}, {y})")
 
-        # Ajouter pour affichage
         qr_codes.append({
             'data': qr_data,
             'points': pts,
@@ -74,7 +71,7 @@ if not cap.isOpened():
     exit()
 
 trackers = []
-detected_qr_codes = set()  # Pour éviter les doublons
+detected_qr_codes = {}
 
 cv2.namedWindow("Frame")
 
@@ -246,95 +243,40 @@ while True:
     display_frame = frame.copy()
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     key = cv2.waitKey(30) & 0xFF
+    decoded_objects = decode(frame)
 
-    if key == ord('q'):
-        break
-    elif key == ord('d'):
-        auto_detect = not auto_detect
-        print(f"Auto detection: {'ON' if auto_detect else 'OFF'}")
-    elif key == ord('p'):
-        print("Select region(s), press Enter to confirm and Esc to close.")
-        rois = cv2.selectROIs("Selection", frame.copy(), fromCenter=False, showCrosshair=True)
-        cv2.destroyWindow("Selection")
+    to_delete = []
+    for k, v in detected_qr_codes.items():
+        v["ttl"] -= 1
+        if v["ttl"] <= 0:
+            to_delete.append(k)
+    for k in to_delete:
+        del detected_qr_codes[k]
 
-        for x, y, w, h in rois:
-            roi = gray[y:y + h, x:x + w]
-            T6 = extract_bit_plane(roi, 6)
-            T7 = extract_bit_plane(roi, 7)
-            hist = compute_weighted_histogram(roi)
-            name = input("Enter name for the object: ")
-            trackers.append({
-                "name": name,
-                "qr_data": "Manual",
-                "qr_type": "Manual",
-                "T6_base": T6,
-                "T7_base": T7,
-                "hist": hist,
-                "w0": w,
-                "h0": h,
-                "last_x": x,
-                "last_y": y,
-                "last_angle": 0
-            })
-        print(f"{len(rois)} object(s) added.")
+    for obj in decoded_objects:
+        qr_data = obj.data.decode("utf-8")
+        points = obj.polygon
+        if len(points) >= 4:
+            pts = np.array([(p.x, p.y) for p in points], dtype=np.int32)
 
-    # Automatic QR code detection
-    if auto_detect:
-        detected_qrs = detect_qr_codes(frame, gray)
+            # Affichage du contour
+            cv2.polylines(frame, [pts], True, (255, 0, 0), 2)
+            cv2.putText(frame, qr_data[:20], (pts[0][0], pts[0][1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
-        # Draw detected QR codes (before tracking)
-        for qr in detected_qrs:
-            x, y, w, h = qr['rect']
-            points = qr['points']
+            # Mémorisation simple avec TTL
+            detected_qr_codes[qr_data] = {
+                "points": pts,
+                "ttl": 30  # persiste 30 frames sans redétection
+            }
 
-            # Draw QR code boundary with its actual shpe
-            cv2.polylines(display_frame, [points], True, (255, 0, 0), 2)
-            cv2.putText(display_frame, f"Detected: {qr['data'][:20]}...",
-                        (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+    # Affichage optionnel des QR non vus récemment (gris)
+    for qr_data, info in detected_qr_codes.items():
+        if info["ttl"] < 30:
+            cv2.polylines(frame, [info["points"]], True, (150, 150, 150), 1)
 
-    # Process tracked objects
-    if len(trackers) > 0:
-        for obj in trackers:
-            # Tracking (local + global)
-            found, best_score, best_coords, best_angle = track_object_locally(obj, gray)
-            if not found or best_score < 2400:
-                found, best_score, best_coords, best_angle = track_object_globally(obj, gray)
-
-            obj["last_x"], obj["last_y"] = best_coords
-            obj["last_angle"] = best_angle
-
-            # --- Affichage du contour ---
-            if obj.get("recent_detection") and obj.get("qr_points") is not None:
-                # Utiliser le contour réel fourni par pyzbar
-                cv2.polylines(display_frame, [obj["qr_points"]], True, (255, 0, 0), 2)
-                x, y = obj["qr_points"][0]
-            else:
-                # Utiliser rectangle tourné si plus de qr_points fiables
-                x, y = best_coords
-                w, h = obj["w0"], obj["h0"]
-                center = (x + w // 2, y + h // 2)
-                points = get_rotated_rectangle_points(center, (w, h), best_angle)
-                cv2.polylines(display_frame, [points], True, (0, 255, 0), 2)
-                obj["qr_points"] = points  # Met à jour le contour estimé
-
-            # --- Affichage texte + point central ---
-            info_text = f"{obj['name']}: {obj['qr_data'][:15]}..."
-            angle_text = f"Angle: {best_angle:.0f}° Score: {best_score:.1f}"
-            cv2.putText(display_frame, info_text, (x, y - 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            cv2.putText(display_frame, angle_text, (x, y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-            cv2.circle(display_frame, (x + w // 2, y + h // 2), 3, (0, 0, 255), -1)
-
-            # Après le premier affichage, on désactive le flag "récent"
-            obj["recent_detection"] = False
-
-    # Display status
-    status_text = f"Tracking: {len(trackers)} QR codes | Detection: {'ON' if auto_detect else 'OFF'}"
-    cv2.putText(display_frame, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-    cv2.imshow("Frame", display_frame)
-    if cv2.waitKey(1) == 27:
+    cv2.imshow("QR Tracker", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 cap.release()
