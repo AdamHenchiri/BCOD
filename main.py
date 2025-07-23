@@ -28,28 +28,34 @@ while True:
 
     retval, decoded_info, points, _ = qr_detector.detectAndDecodeMulti(gray)
 
-    if retval and points is not None:
-        for i, qr_data in enumerate(decoded_info):
-            if not qr_data:
-                continue
-
+    seen_now = set()
+    if retval:
+        for i, data in enumerate(decoded_info):
+            if not data: continue
             pts = np.int32(points[i]).reshape(-1, 2)
-            robots.setdefault(qr_data, Robot(qr_data, pts, frame_id)).update(pts, frame_id)
+            seen_now.add(data)
 
-    # Nettoyage des robots inactifs
-    inactive_qr = [qr for qr, rob in robots.items() if not rob.is_active(frame_id)]
-    for qr in inactive_qr:
-        del robots[qr]
+            if data not in robots:
+                robots[data] = Robot(data, pts)
+            robots[data].update(pts, frame_id)
 
-    # Affichage
-    for qr_data, rob in robots.items():
-        cv2.polylines(display, [np.int32(rob.points)], True, (0, 255, 0), 2)
-        x, y = rob.points[0]
-        cv2.putText(display, qr_data[:20], (x, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    for qr_id, robot in robots.items():
+        if qr_id in seen_now:
+            cv2.polylines(frame, [np.int32(robot.points)], True, (0, 255, 0), 2)
+        elif robot.is_active(frame_id):
+            pred = robot.predict()
+            cv2.circle(frame, (int(pred[0]), int(pred[1])), 5, (0, 0, 255), -1)
+            cv2.putText(frame, f"{qr_id} (pred)", (int(pred[0]), int(pred[1]) - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-    cv2.imshow("QR Tracker", display)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    # Nettoyage
+    to_delete = [r for r in robots if not robots[r].is_active(frame_id)]
+    for r in to_delete:
+        del robots[r]
+
+    cv2.imshow("QR Tracking with Kalman", frame)
+    frame_id += 1
+    if cv2.waitKey(1) == 27:
         break
 
 cap.release()
