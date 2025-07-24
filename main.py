@@ -2,7 +2,10 @@ import cv2
 import numpy as np
 from utils import extract_bit_plane, compute_psi, compute_weighted_histogram
 
-cap = cv2.VideoCapture("images/templates/childs.mp4")
+# cap = cv2.VideoCapture("images/templates/childs.mp4")
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    raise IOError("Cannot open webcam")
 object_detector = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=80)
 
 trackers = []
