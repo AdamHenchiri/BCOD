@@ -11,10 +11,10 @@ class OptimizedTracker:
         self.search_radius = 30
         self.scales = [0.8, 1.0, 1.2]
         self.score_threshold = 2000
-        self.angle_history_len = 5  # Nombre de frames pour lisser l'angle
+        self.angle_history_len = 5
 
     def _normalize_angle(self, angle):
-        """Normalise un angle pour être dans la plage [0, 360)"""
+        """Normalise angle"""
         return angle % 360
 
     def add_tracker(self, name, roi, center_x, center_y, w, h, angle=0):
@@ -23,10 +23,9 @@ class OptimizedTracker:
 
         # Validation de la ROI
         if gray_roi.size == 0 or w < 10 or h < 10:
-            print(f"⚠️ ROI trop petite pour {name}, ignorée")
+            print(f"ROI too small {name}")
             return False
 
-        # Templates à différentes échelles
         templates = {}
         for scale in self.scales:
             scaled_w, scaled_h = int(w * scale), int(h * scale)
@@ -39,13 +38,10 @@ class OptimizedTracker:
                 }
 
         if not templates:
-            print(f"⚠️ Impossible de créer les templates pour {name}")
+            print(f"cannot create this template {name}")
             return False
 
-        # Calcul de l'histogramme de référence original
         original_hist = compute_weighted_histogram_optimized(gray_roi)
-
-        # Normaliser l'angle initial pour le tracker
         normalized_initial_angle = self._normalize_angle(angle)
 
         tracker = {
@@ -57,8 +53,8 @@ class OptimizedTracker:
             "h0": h,
             "center_x": center_x,
             "center_y": center_y,
-            "angle": normalized_initial_angle,  # Angle normalisé
-            "angle_history": [normalized_initial_angle] * self.angle_history_len,  # Historique pour le lissage
+            "angle": normalized_initial_angle,
+            "angle_history": [normalized_initial_angle] * self.angle_history_len,
             "confidence": 1.0,
             "lost_frames": 0,
             "update_count": 0,
@@ -232,7 +228,7 @@ class OptimizedTracker:
                     if (obj["drift_protection"] and
                             original_hist_sim > current_hist_sim + obj["original_score_threshold"]):
                         hist_sim = original_hist_sim
-                        # print(f"🔄 Retour au template original pour {obj['name']} (dérive détectée)")
+                        # print(f"Retour au template original pour {obj['name']} (dérive détectée)")
                         obj["current_hist"] = obj["original_hist"].copy()  # Réinitialiser le template courant
 
                     total_score = 0.7 * zeros + 0.3 * max(0, hist_sim) * 1000
@@ -261,9 +257,9 @@ class OptimizedTracker:
                 if original_sim > 0.6:  # Seuil de sécurité augmenté
                     alpha = 0.05  # Mise à jour très douce
                     obj["current_hist"] = (1 - alpha) * obj["current_hist"] + alpha * new_hist
-                    # print(f"🔄 Template mis à jour prudemment pour {obj['name']}")
+                    # print(f"Template mis à jour prudemment pour {obj['name']}")
                 else:
-                    # print(f"⚠️ Mise à jour refusée pour {obj['name']} (trop différent de l'original)")
+                    # print(f"Mise à jour refusée pour {obj['name']} (trop différent de l'original)")
                     pass  # Ne pas imprimer constamment
             # else:
             # print(f"Debug: update_template_safe: ROI invalide ou taille incorrecte pour {obj['name']}")
@@ -434,7 +430,7 @@ class OptimizedObjectTracker:
                         )
 
                         if roi is None:
-                            print("⚠️ Impossible d'extraire la ROI rotatée pour le tracker (clic).")
+                            print("Impossible d'extraire la ROI rotatée pour le tracker (clic).")
                             continue
 
                         name = f"Object_{len(self.tracker.trackers) + 1}"
@@ -442,11 +438,11 @@ class OptimizedObjectTracker:
 
                         if success:
                             print(
-                                f"✅ {name} sélectionné (centre: {center_x},{center_y}, angle: {normalized_angle:.1f}°)")
+                                f"{name} sélectionné (centre: {center_x},{center_y}, angle: {normalized_angle:.1f}°)")
                             if len(self.tracker.trackers) >= 1:
                                 print("💡 Appuyez sur 'd' pour désactiver la détection")
                         else:
-                            print(f"❌ Impossible de tracker {name}")
+                            print(f"Impossible de tracker {name}")
                         break
 
     def detect_objects(self, frame):
@@ -510,7 +506,7 @@ class OptimizedObjectTracker:
         self.detection_enabled = not self.detection_enabled
         status = "ACTIVÉE" if self.detection_enabled else "DÉSACTIVÉE"
         cpu_info = "consommation CPU normale" if self.detection_enabled else "économie CPU"
-        print(f"🔄 Détection {status} ({cpu_info})")
+        print(f"Détection {status} ({cpu_info})")
 
     def run(self):
         """Main loop avec RBB tracking complet"""
@@ -520,7 +516,7 @@ class OptimizedObjectTracker:
 
         cv2.namedWindow("RBB Object Tracking", cv2.WINDOW_AUTOSIZE)
 
-        print("🎯 Instructions:")
+        print("Instructions:")
         print("- Clic sur objet détecté (contour vert) pour tracker avec RBB")
         print("- 'd' : ACTIVER/DÉSACTIVER détection")
         print("- 'v' : basculer affichage détections")
@@ -577,7 +573,7 @@ class OptimizedObjectTracker:
                                      "rotated_rects": rotated_rects
                                  })
 
-            # 🔄 TRACKING AVEC RBB
+            # TRACKING AVEC RBB
             active_trackers = []
             for obj in self.tracker.trackers:
                 coords, score, found, angle = self.tracker.track_object(gray, obj)
@@ -593,7 +589,7 @@ class OptimizedObjectTracker:
                     else:
                         color = (0, 0, 255)  # Rouge (perdu ou très faible confiance)
 
-                    # 🔄 AFFICHAGE RBB POUR LE TRACKING
+                    # AFFICHAGE RBB POUR LE TRACKING
                     rbb_corners = self.tracker.get_rbb_corners(center_x, center_y, w, h, angle)
                     cv2.drawContours(display_frame, [rbb_corners], 0, color, 3)
 
@@ -660,31 +656,30 @@ class OptimizedObjectTracker:
             elif key == ord('v'):
                 self.show_detections = not self.show_detections
                 status = "visible" if self.show_detections else "masqué"
-                print(f"👁️ Affichage détections: {status}")
+                print(f"Affichage détections: {status}")
             elif key == ord('s'):
                 self.frame_skip = (self.frame_skip + 1) % 4
-                print(f"📊 Frame skip: {self.frame_skip}")
+                print(f"Frame skip: {self.frame_skip}")
             elif key == ord('p'):  # Toggle drift protection
                 for obj in self.tracker.trackers:
                     obj["drift_protection"] = not obj["drift_protection"]
-                status = "ACTIVÉE" if (self.tracker.trackers and
-                                       self.tracker.trackers[0]["drift_protection"]) else "DÉSACTIVÉE"
-                print(f"🛡️ Protection anti-dérive: {status}")
+                status = "ACTIVATE" if (self.tracker.trackers and
+                                       self.tracker.trackers[0]["drift_protection"]) else "OFF"
+                print(f"Protection: {status}")
             elif key == ord('r'):
                 self.tracker.trackers.clear()
                 if not self.detection_enabled:
                     self.detection_enabled = True
-                    print("🔄 Détection réactivée après reset")
-                print("🔄 Tous les trackers supprimés")
+                    print("detection on")
+                print("disable all trackers")
 
         self.cleanup()
 
     def cleanup(self):
-        """Clean up resources"""
         if self.cap:
             self.cap.release()
         cv2.destroyAllWindows()
-        print("🧹 Nettoyage terminé")
+        print("Clean done")
 
 
 if __name__ == "__main__":
@@ -692,7 +687,7 @@ if __name__ == "__main__":
         tracker = OptimizedObjectTracker()
         tracker.run()
     except Exception as e:
-        print(f"❌ Erreur: {e}")
+        print(f"Error: {e}")
         import traceback
 
         traceback.print_exc()

@@ -119,10 +119,16 @@ python benchmark.py
 This will run each tracker on all videos in parallel, saving logs and output video
 you can display the tracked bounding boxes on the video frames by turning SHOW_PREVIEW variable to `True` in `benchmark.py`
 
+ ![threading_benchmark.gif](threading_benchmark.gif)
+
 ### Analyse Results
 I evaluated the performance of all the object tracking/detection methods across 10 videos
 Below you can find a graph that is a summary of the results:
-![img.png](img.png)
+
+
+![img.png](graph/img.png)
+
+
 **BitPlaneHist and BitplaneEns** stand out as **more stable and reliable methods**, providing a better balance between accuracy and latency.
 They maintain solid average accuracies (~26%) close to BitPlane’s peak levels but with much lower latency (~8 ms and ~31 ms respectively) and more consistent FPS.
 This suggests that these enhanced BitPlane variants improve robustness while keeping computational cost manageable, making them practical for real-time or near-real-time applications.

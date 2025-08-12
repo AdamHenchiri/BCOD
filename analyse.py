@@ -32,7 +32,7 @@ plt.title("Accuracy moyenne par méthode")
 plt.ylabel("Accuracy")
 plt.xlabel("Méthode")
 if save_plots:
-    plt.savefig("accuracy_par_methode.png")
+    plt.savefig("graph/accuracy_par_methode.png")
 plt.show()
 
 # --- GRAPHIQUE LATENCE PAR MÉTHODE ---
@@ -42,7 +42,7 @@ plt.title("Latence moyenne par méthode (ms)")
 plt.ylabel("Latence (ms)")
 plt.xlabel("Méthode")
 if save_plots:
-    plt.savefig("latence_par_methode.png")
+    plt.savefig("graph/latence_par_methode.png")
 plt.show()
 
 # --- GRAPHIQUE FPS PAR MÉTHODE ---
@@ -52,7 +52,7 @@ plt.title("FPS moyen par méthode")
 plt.ylabel("FPS")
 plt.xlabel("Méthode")
 if save_plots:
-    plt.savefig("fps_par_methode.png")
+    plt.savefig("graph/fps_par_methode.png")
 plt.show()
 
 # --- GRAPHIQUE ACCURACY vs LATENCE ---
@@ -63,5 +63,5 @@ plt.xlabel("Latence (ms)")
 plt.ylabel("Accuracy")
 plt.grid(True)
 if save_plots:
-    plt.savefig("accuracy_vs_latence.png")
+    plt.savefig("graph/accuracy_vs_latence.png")
 plt.show()
