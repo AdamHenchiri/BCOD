@@ -1,7 +1,6 @@
 import cv2
 
-# here i have to add the ip adress of esp32 stream
-url = "http://192.168.X.X:81/stream"
+url = ""
 cap = cv2.VideoCapture(url)
 
 while True:

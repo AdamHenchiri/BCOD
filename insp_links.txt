@@ -1,0 +1,10 @@
+https://arxiv.org/abs/1907.03892
+https://link.springer.com/article/10.1007/s11042-023-15564-x
+https://mindkosh.com/blog/oriented-bounding-box-annotation-all-you-need-to-know/
+https://github.com/armaanpriyadarshan/Rotation-Tracking-OpenCV/blob/main/background_subtraction_test.py
+https://www.youtube.com/watch?v=eFsljRvPHp0
+https://www.youtube.com/watch?v=2wwVogo88aY
+https://www.youtube.com/watch?v=vbGRUU_Xj1A&t
+https://www.youtube.com/watch?v=W1exH29pD0Q&t
+https://www.youtube.com/watch?v=0sPlnrEMyYk&t
+https://medium.com/quantrium-tech/object-detection-multi-template-matching-2c9c9fc1a867
