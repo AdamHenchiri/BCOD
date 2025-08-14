@@ -7,7 +7,7 @@ from utils import extract_bit_plane_numba, compute_psi_numba, compute_weighted_h
 
 
 class BitplaneHistTracker(TrackerMethod):
-    def __init__(self, init_frame, roi, score_threshold=0.5, search_radius=50, top_k=6, pyr_scales=(0.5, 0.75, 1.0)):
+    def __init__(self, init_frame, roi, score_threshold=0.5, search_radius=50, top_k=6, pyr_scales=(0.85, 0.9, 1.0, 1.1, 1.15)):
         # roi: x, y, w, h (float or int)
         x, y, w, h = map(int, roi)
         self.last_x, self.last_y = x, y
@@ -27,7 +27,7 @@ class BitplaneHistTracker(TrackerMethod):
         self.template_b7 = extract_bit_plane_numba(self.template, 7)
         self.template_hist = compute_weighted_histogram_optimized(self.template)
 
-        # Prépare template réduits pour matchTemplate (bitplane7)
+        # Prepare template for each scale for matchTemplate (bitplane7)
         self.template_b7_pyrs = {}
         for s in self.pyr_scales:
             if s == 1.0:
@@ -38,6 +38,7 @@ class BitplaneHistTracker(TrackerMethod):
             # matchTemplate needs single channel uint8
             self.template_b7_pyrs[s] = (t.astype(np.uint8))
 
+        self.last_angle = 0
     def _get_search_window(self, frame_gray):
         H, W = frame_gray.shape
         r = int(self.search_radius * (2.0 - self.confidence))
@@ -49,8 +50,8 @@ class BitplaneHistTracker(TrackerMethod):
 
     def _coarse_match(self, frame_gray):
         """
-        Utilise matchTemplate sur bitplane7 réduits (pyramid scales)
-        Retourne une liste de candidats (xx, yy, scale, score_tmplt) triée par score desc.
+        Using matchTemplate on bitplane7 (pyramid scales)
+        Return a list of candidats (xx, yy, scale, score_tmplt) by desc ord.
         """
         x0, x1, y0, y1 = self._get_search_window(frame_gray)
         search_patch = frame_gray[y0:y1, x0:x1]
@@ -76,10 +77,9 @@ class BitplaneHistTracker(TrackerMethod):
             if tpl.shape[0] > sp_b7.shape[0] or tpl.shape[1] > sp_b7.shape[1]:
                 continue
 
-            # matchTemplate (TM_CCOEFF_NORMED gives score in [-1,1] ; we keep that)
+            # matchTemplate (gives score in [-1,1])
             res = cv2.matchTemplate(sp_b7, tpl, cv2.TM_CCOEFF_NORMED)
             # get top N peaks from res
-            # flatten and argpartition for speed
             flat = res.ravel()
             k = min(self.top_k, flat.size)
             if k == 0:
@@ -88,8 +88,7 @@ class BitplaneHistTracker(TrackerMethod):
             # convert flat idx to 2D coords
             ys, xs = np.unravel_index(idxs, res.shape)
             for xx_rel, yy_rel in zip(xs, ys):
-                score = float(res[yy_rel, xx_rel])  # already normalized
-                # map back to full-image coordinates
+                score = float(res[yy_rel, xx_rel])
                 if s == 1.0:
                     xx_full = x0 + xx_rel
                     yy_full = y0 + yy_rel
@@ -116,12 +115,12 @@ class BitplaneHistTracker(TrackerMethod):
                 break
         return filtered
 
-    def _eval_candidate(self, frame_gray, cand, angles=(0, -10, 10)):
+    def _eval_candidate(self, frame_gray, cand, angles=(0, 10, -10)):
         """
-        Évalue finement un candidat :
-         - extrait ROI (w,h) autour de cand
-         - calcule psi (zeros) et histogram similarity
-         - teste petites rotations (via cv2.warpAffine) et renvoie le meilleur tuple (bbox, score)
+        Evaluate candidat :
+         - extract ROI (w,h) around
+         - compute psi (zeros) and histogram similarity
+         - test littlr rotations (via cv2.warpAffine)
         """
         xx, yy, scale_used, tm_score = cand
         H, W = frame_gray.shape
@@ -178,6 +177,7 @@ class BitplaneHistTracker(TrackerMethod):
         if not candidates:
             # fallback : small local grid around last position (as before, but reduced)
             fallback_bbox = (self.last_x, self.last_y, self.w, self.h)
+            self.last_angle = 0
             return fallback_bbox, 0.0
 
         # Fine evaluation in parallel (candidates x small rotations)
@@ -198,10 +198,10 @@ class BitplaneHistTracker(TrackerMethod):
                 if score_local > best_score:
                     best_score = score_local
                     best_bbox = bbox_local
+                    self.last_angle = angle
 
         # update last pos + confidence
         self.last_x, self.last_y = best_bbox[0], best_bbox[1]
-        # normaliser score (tweak selon dynamique de ton compute_psi)
         # psi retourne probablement un int ou float >0 ; ici on suppose best_score est dans un intervalle raisonnable
         if best_score >= self.score_threshold:
             self.confidence = min(1.0, self.confidence + 0.08)
